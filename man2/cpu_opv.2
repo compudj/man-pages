@@ -1,0 +1,285 @@
+.\" Copyright 2017-2018 Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
+.\"
+.\" %%%LICENSE_START(VERBATIM)
+.\" Permission is granted to make and distribute verbatim copies of this
+.\" manual provided the copyright notice and this permission notice are
+.\" preserved on all copies.
+.\"
+.\" Permission is granted to copy and distribute modified versions of this
+.\" manual under the conditions for verbatim copying, provided that the
+.\" entire resulting derived work is distributed under the terms of a
+.\" permission notice identical to this one.
+.\"
+.\" Since the Linux kernel and libraries are constantly changing, this
+.\" manual page may be incorrect or out-of-date.  The author(s) assume no
+.\" responsibility for errors or omissions, or for damages resulting from
+.\" the use of the information contained herein.  The author(s) may not
+.\" have taken the same level of care in the production of this manual,
+.\" which is licensed free of charge, as they might when working
+.\" professionally.
+.\"
+.\" Formatted or processed versions of this manual, if unaccompanied by
+.\" the source, must acknowledge the copyright and authors of this work.
+.\" %%%LICENSE_END
+.\"
+.TH CPU_OPV 2 2018-10-27 "Linux" "Linux Programmer's Manual"
+.SH NAME
+cpu_opv \- Per-CPU-atomic operation vector system call
+.SH SYNOPSIS
+.nf
+.B #include <linux/cpu_opv.h>
+.sp
+.BI "int cpu_opv(struct cpu_op * " cpu_opv ", int " cpuopcnt ", int " cpu ", int " flags ");
+.sp
+.SH DESCRIPTION
+The cpu_opv system call executes a vector of operations on behalf of
+user-space on a specific CPU atomically with respect to concurrent
+execution on that CPU.
+
+The term CPU used in this documentation refers to a hardware execution
+context.
+
+The operations available are: comparison, memcpy, add. Both memcpy and
+add operations have a counterpart with release semantic. The system call
+receives a CPU number from user-space as argument, which is the CPU on
+which those operations need to be performed.  All pointers in the ops
+must have been set up to point to the per CPU memory of the CPU on which
+the operations should be executed. The "comparison" operation can be
+used to check that the data used in the preparation step did not change
+between preparation of system call inputs and operation execution by the
+kernel.
+
+An overall maximum of 4216 bytes in enforced on the sum of operation
+length within an operation vector, so user-space cannot generate a
+too long interrupt-off critical section or inter-processor interrupt
+handler. Each operation is also limited a length of 4096 bytes. A
+maximum limit of 4 operations per cpu_opv syscall invocation is
+enforced.
+
+.PP
+The layout of
+.B struct cpu_opv
+is as follows:
+.TP
+.B Fields
+
+.TP
+.in +4n
+.I op
+Operation of type
+.B enum cpu_op_type
+to perform. This operation type selects the associated "u" union field.
+.in
+.TP
+.in +4n
+.I len
+Length (in bytes) of data to consider for this operation.
+.in
+.TP
+.in +4n
+.I u.compare_op
+For a
+.B CPU_COMPARE_EQ_OP
+, and
+.B CPU_COMPARE_NE_OP
+,
+.B a
+and
+.B b
+are pointers to data meant to be compared. The
+.B expect_fault_a
+and
+.B expect_fault_b
+fields indicate whether a page fault should be expected when
+accessing the memory holding this data. If
+.B expect_fault_a
+, or
+.B expect_fault_b
+is set, EAGAIN is returned on fault, else EFAULT is returned. The
+.B len
+field is allowed to take values from 0 to 4096 for comparison
+operations.
+.in
+.TP
+.in +4n
+.I u.memcpy_op
+For a
+.B CPU_MEMCPY_OP
+, or
+.B CPU_MEMCPY_RELEASE_OP
+, contains the
+.B dst
+and
+.B src
+pointers, expressing a copy of
+.B src
+into
+.B dst. The
+.B expect_fault_dst
+and
+.B expect_fault_src
+fields indicate whether a page fault should be expected when accessing
+the memory holding both source and destination, which starts at the
+pointer address, of length
+.B len .
+If
+.B expect_fault_dst
+, or
+.B expect_fault_src
+is set, EAGAIN is returned on fault, else EFAULT is returned. The
+.B len
+field is allowed to take values from 0 to 4096 for memcpy
+operations.
+.in
+.TP
+.in +4n
+.I u.arithmetic_op
+For a
+.B CPU_ADD_OP
+, or
+.B CPU_ADD_RELEASE_OP ,
+contains the
+.B p
+,
+.B count
+, and
+.B expect_fault_p
+fields, which are respectively a pointer to the memory location to
+increment, the 64-bit signed integer value to add, and whether a page
+fault should be expected for
+.B p .
+If
+.B expect_fault_p
+is set, EAGAIN is returned on fault, else EFAULT is returned. The
+.B len
+field is allowed to take values of 1, 2, 4, 8 bytes for arithmetic
+operations.
+.in
+
+.PP
+The enum cpu_op_types contains the following operations:
+.IP \[bu] 2
+CPU_COMPARE_EQ_OP: Compare whether two memory locations are equal,
+.IP \[bu] 2
+CPU_COMPARE_NE_OP: Compare whether two memory locations differ,
+.IP \[bu] 2
+CPU_MEMCPY_OP: Copy a source memory location into a destination,
+.IP \[bu] 2
+CPU_MEMCPY_RELEASE_OP: Copy a source memory location into a destination,
+with release semantic,
+.IP \[bu] 2
+CPU_ADD_OP: Increment a target memory location of a given count,
+.IP \[bu] 2
+CPU_ADD_RELEASE_OP: Increment a target memory location of a given count,
+with release semantic,
+
+All of the operations above provide single-copy atomicity guarantees for
+word-sized, word-aligned target pointers, for both loads and stores.
+
+.PP
+The
+.I cpuopcnt
+argument is the number of elements in the cpu_opv array. It can take
+values from 0 to an upper limit returned by invoking
+.BR cpu_opv ()
+with the
+.B CPU_OP_VEC_LEN_MAX_FLAG
+flag set.
+
+.PP
+The
+.I cpu
+argument is the CPU number on which the operation sequence needs to be
+executed.
+
+.PP
+The
+.I flags
+argument is a bitmask. When
+.B CPU_OP_NR_FLAG
+is set, the
+.BR cpu_opv ()
+system call returns the number of operations available.
+ When
+.B CPU_OP_VEC_LEN_MAX_FLAG
+is set, the
+.BR cpu_opv ()
+system call returns the maximum length of the sequence of operations
+that is accepted as input argument by the system call. When
+.I flags
+is 0, the sequence of operations received as parameter is performed.
+
+.SH RETURN VALUE
+When invoked with
+.I flags
+set at 0, a return value of 0 indicates success. On error, \-1 is
+returned, and
+.I errno
+is set.
+If a comparison operation fails, execution of the operation vector is
+stopped, and the return value is the index after the comparison
+operation (values between 1 and 4).
+
+When
+.I flags
+is non-zero, on error,  \-1 is returned, and
+.I errno
+is set. On success, the behavior is described in the
+.I DESCRIPTION
+section for each flag.
+
+
+.SH ERRORS
+.TP
+.B EAGAIN
+.BR cpu_opv ()
+system call should be attempted again.
+.TP
+.B EINVAL
+Either
+.I flags
+contains an invalid value, or
+.I cpu
+contains an invalid value or a value not allowed by the current thread's
+allowed cpu mask, or
+.I cpuopcnt
+contains an invalid value, or the
+.I cpu_opv
+operation vector contains an invalid
+.I op
+value, or the
+.I cpu_opv
+operation vector contains an invalid
+.I len
+value, or the
+.I cpu_opv
+operation vector sum of
+.I len
+values is too large.
+
+.TP
+.B ENOSYS
+The
+.BR cpu_opv ()
+system call is not implemented by this kernel.
+.TP
+.B EFAULT
+.I cpu_opv
+is an invalid address, or a pointer contained within an operation
+is invalid (and a fault is not expected for that pointer). Pointers to
+device and noncached memory within an operation are considered invalid.
+
+.SH VERSIONS
+The
+.BR cpu_opv ()
+system call was added in Linux 4.X
+.BR (TODO).
+
+.SH CONFORMING TO
+.BR cpu_opv ()
+is Linux-specific.
+
+.in
+.SH SEE ALSO
+.BR membarrier (2) ,
+.BR rseq (2)
